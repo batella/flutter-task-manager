@@ -1,0 +1,58 @@
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+
+# Android/Gradle
+.gradle/
+**/local.properties
+android/.gradle/
+android/app/.cxx/
+android/app/build/
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Runner.xcworkspace/
+ios/Runner/GeneratedPluginRegistrant.*
+ios/Podfile.lock
+ios/Flutter/Generated.xcconfig
+
+# Xcode
+*.xcworkspace
+xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+*.moved-aside
+DerivedData/
+*.hmap
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temporary
+*.log
+*.tmp
+*.swp
+
+# Coverage
+.coverage
+
+# Keystore (if you store release keys locally)
+*.jks
+*.keystore
+
+# Keep pubspec.lock tracked for apps to ensure reproducible builds
+# (If this is a package, consider ignoring pubspec.lock)
