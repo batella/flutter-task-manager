@@ -24,6 +24,11 @@ ios/Runner/GeneratedPluginRegistrant.*
 ios/Podfile.lock
 ios/Flutter/Generated.xcconfig
 
+# Generated plugin registrants created by Flutter for platform embedding
+# Ignore generated plugin registrant files across all platforms (linux/macos/windows/android/ios)
+**/generated_plugin_registrant.*
+**/gen_dart_plugin_registrant.*
+
 # Xcode
 *.xcworkspace
 xcuserdata/
