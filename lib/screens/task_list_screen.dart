@@ -4,6 +4,8 @@ import '../models/category.dart';
 import '../services/database_service.dart';
 import '../widgets/task_card.dart';
 import 'task_form_screen.dart';
+import '../services/sensor_service.dart';
+import '../services/location_service.dart';
 
 class TaskListScreen extends StatefulWidget {
   const TaskListScreen({super.key});
@@ -24,6 +26,153 @@ class _TaskListScreenState extends State<TaskListScreen> {
     super.initState();
     _loadTasks();
     _loadCategories();
+    _setupShakeDetection(); // INICIAR SHAKE DETECTION
+  }
+    @override
+  void dispose() {
+    SensorService.instance.stop(); // PARAR SHAKE
+    super.dispose();
+  }
+
+
+  // SHAKE DETECTION
+  void _setupShakeDetection() {
+    SensorService.instance.startShakeDetection(() {
+      _showShakeDialog();
+    });
+  }
+
+  void _showShakeDialog() {
+    final pendingTasks = _tasks.where((t) => !t.completed).toList();
+
+    if (pendingTasks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🎉 Nenhuma tarefa pendente!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: const [
+            Icon(Icons.vibration, color: Colors.blue),
+            SizedBox(width: 8),
+            Expanded(child: Text('Shake detectado!')),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Selecione uma tarefa para completar:'),
+            const SizedBox(height: 16),
+            ...pendingTasks.take(3).map((task) => ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                task.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.check_circle, color: Colors.green),
+                onPressed: () => _completeTaskByShake(task),
+              ),
+            )),
+            if (pendingTasks.length > 3)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '+ ${pendingTasks.length - 3} outras',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _completeTaskByShake(Task task) async {
+    try {
+      final updated = task.copyWith(
+        completed: true,
+        completedAt: DateTime.now(),
+        completedBy: 'shake',
+      );
+
+      await DatabaseService.instance.update(updated);
+      Navigator.pop(context);
+      await _loadTasks();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ "${task.title}" completa via shake!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _filterByNearby() async {
+    final position = await LocationService.instance.getCurrentLocation();
+
+    if (position == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Não foi possível obter localização'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    final nearbyTasks = await DatabaseService.instance.getTasksNearLocation(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      radiusInMeters: 1000,
+    );
+
+    setState(() {
+      _tasks = nearbyTasks;
+      _filter = 'nearby';
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('📍 ${nearbyTasks.length} tarefa(s) próxima(s)'),
+          backgroundColor: Colors.blue,
+        ),
+      );
+    }
   }
 
   Future<void> _loadTasks() async {

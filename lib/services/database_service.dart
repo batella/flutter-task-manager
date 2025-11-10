@@ -21,7 +21,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -48,6 +48,12 @@ class DatabaseService {
         createdAt TEXT NOT NULL,
         dueDate TEXT,
         categoryId TEXT,
+        photoPaths TEXT,
+        completedAt TEXT,
+        completedBy TEXT,
+        latitude REAL,
+        longitude REAL,
+        locationName TEXT,
         FOREIGN KEY (categoryId) REFERENCES categories (id)
       )
     ''');
@@ -57,23 +63,42 @@ class DatabaseService {
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // Migração incremental para cada versão
     if (oldVersion < 2) {
-      // Adicionar tabela de categorias
-      await db.execute('''
-        CREATE TABLE categories (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          color INTEGER NOT NULL
-        )
-      ''');
-
-      // Adicionar novas colunas na tabela tasks
-      await db.execute('ALTER TABLE tasks ADD COLUMN dueDate TEXT');
-      await db.execute('ALTER TABLE tasks ADD COLUMN categoryId TEXT');
-
-      // Inserir categorias padrão
-      await _insertDefaultCategories(db);
+      // versões antigas podem já ter photoPath adicionado em v2
+      await db.execute('ALTER TABLE tasks ADD COLUMN photoPath TEXT');
     }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE tasks ADD COLUMN completedAt TEXT');
+      await db.execute('ALTER TABLE tasks ADD COLUMN completedBy TEXT');
+    }
+    if (oldVersion < 4) {
+      await db.execute('ALTER TABLE tasks ADD COLUMN latitude REAL');
+      await db.execute('ALTER TABLE tasks ADD COLUMN longitude REAL');
+      await db.execute('ALTER TABLE tasks ADD COLUMN locationName TEXT');
+    }
+    // v5: migrar para photoPaths (JSON array)
+    if (oldVersion < 5) {
+      try {
+        await db.execute('ALTER TABLE tasks ADD COLUMN photoPaths TEXT');
+
+        // Migrar dados existentes de photoPath para photoPaths
+        final rows = await db.query('tasks');
+        for (final row in rows) {
+          final id = row['id'] as String?;
+          final oldPhoto = row['photoPath'] as String?;
+          final newPhotoPaths = row['photoPaths'] as String?;
+
+          if (id != null && oldPhoto != null && (newPhotoPaths == null || newPhotoPaths.isEmpty)) {
+            final migrated = '["' + oldPhoto.replaceAll('"', '\\"') + '"]';
+            await db.update('tasks', {'photoPaths': migrated}, where: 'id = ?', whereArgs: [id]);
+          }
+        }
+      } catch (e) {
+        print('⚠️ Erro na migração para photoPaths: $e');
+      }
+    }
+    print('✅ Banco migrado de v$oldVersion para v$newVersion');
   }
 
   Future<void> _insertDefaultCategories(Database db) async {
@@ -117,6 +142,27 @@ class DatabaseService {
     final result = await db.query('tasks', orderBy: orderBy);
     return result.map((map) => Task.fromMap(map)).toList();
   }
+
+  // Método especial: buscar tarefas por proximidade
+  Future<List<Task>> getTasksNearLocation({
+    required double latitude,
+    required double longitude,
+    double radiusInMeters = 1000,
+  }) async {
+    final allTasks = await readAll();
+
+    return allTasks.where((task) {
+      if (!task.hasLocation) return false;
+
+      // Cálculo de distância usando fórmula de Haversine (simplificada)
+      final latDiff = (task.latitude! - latitude).abs();
+      final lonDiff = (task.longitude! - longitude).abs();
+      final distance = ((latDiff * 111000) + (lonDiff * 111000)) / 2;
+
+      return distance <= radiusInMeters;
+    }).toList();
+  }
+
 
   Future<int> update(Task task) async {
     final db = await database;
