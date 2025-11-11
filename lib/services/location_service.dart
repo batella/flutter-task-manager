@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 
@@ -67,16 +68,23 @@ class LocationService {
 
   // GEOCODING
   Future<String?> getAddressFromCoordinates(double lat, double lon) async {
+    if (kIsWeb) {
+      // geocoding package may not behave consistently on web; skip reverse
+      // geocoding and return null so caller can handle it gracefully.
+      print('⚠️ Reverse geocoding not performed on web');
+      return null;
+    }
+
     try {
       final placemarks = await placemarkFromCoordinates(lat, lon);
       if (placemarks.isNotEmpty) {
         final place = placemarks.first;
-        final parts = [
+        final parts = <String?>[
           place.street,
           place.subLocality,
           place.locality,
           place.administrativeArea,
-        ].where((p) => p != null && p.isNotEmpty).take(3);
+        ].whereType<String>().where((s) => s.isNotEmpty).take(3);
 
         return parts.join(', ');
       }

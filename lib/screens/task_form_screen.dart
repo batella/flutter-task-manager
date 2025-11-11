@@ -1,10 +1,10 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/task.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
 import '../services/camera_service.dart';
+import '../src/image_loader_stub.dart' if (dart.library.io) '../src/image_loader_io.dart' as image_loader;
 import '../widgets/location_picker.dart';
 // import '../services/location_service.dart'; // LocationPicker já importa internamente
 
@@ -125,7 +125,7 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
           ),
           body: Center(
             child: InteractiveViewer(
-              child: Image.file(File(photoPath), fit: BoxFit.contain),
+              child: image_loader.imageWidgetFromPath(photoPath, fit: BoxFit.contain),
             ),
           ),
         ),
@@ -353,11 +353,9 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                                               borderRadius: BorderRadius.circular(8),
                                               child: GestureDetector(
                                                 onTap: () => _viewPhotoAt(p),
-                                                child: Image.file(
-                                                  File(p),
+                                                child: image_loader.imageWidgetFromPath(
+                                                  p,
                                                   fit: BoxFit.cover,
-                                                  width: double.infinity,
-                                                  height: double.infinity,
                                                 ),
                                               ),
                                             ),

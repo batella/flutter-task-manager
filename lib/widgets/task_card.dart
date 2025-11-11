@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
+import '../src/image_loader_stub.dart' if (dart.library.io) '../src/image_loader_io.dart' as image_loader;
 import 'package:intl/intl.dart';
 import '../models/task.dart';
 import '../models/category.dart';
@@ -142,11 +142,13 @@ class TaskCard extends StatelessWidget {
                           // Mostrar pequeno thumbnail da primeira foto
                           ClipRRect(
                             borderRadius: BorderRadius.circular(6),
-                            child: Image.file(
-                              File(task.photoPaths!.first),
+                            child: SizedBox(
                               width: 56,
                               height: 56,
-                              fit: BoxFit.cover,
+                              child: image_loader.imageWidgetFromPath(
+                                task.photoPaths!.first,
+                                fit: BoxFit.cover,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),

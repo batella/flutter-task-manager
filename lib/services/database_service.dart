@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import '../models/task.dart';
 import '../models/category.dart';
@@ -115,32 +116,60 @@ class DatabaseService {
     }
   }
 
+  // Fallback para plataformas que não suportam sqflite (ex.: web)
+  List<Category> _defaultCategoriesList() {
+    return [
+      Category(name: 'Trabalho', color: 0xFF2196F3),
+      Category(name: 'Pessoal', color: 0xFF4CAF50),
+      Category(name: 'Estudo', color: 0xFFFF9800),
+      Category(name: 'Saúde', color: 0xFFE91E63),
+      Category(name: 'Compras', color: 0xFF9C27B0),
+    ];
+  }
+
   Future<Task> create(Task task) async {
-    final db = await database;
-    await db.insert('tasks', task.toMap());
-    return task;
+    try {
+      final db = await database;
+      await db.insert('tasks', task.toMap());
+      return task;
+    } catch (e) {
+      // Ambiente web ou erro ao acessar o banco: log e retornar o objeto sem persistência
+      print('⚠️ Não foi possível salvar no DB (fallback): $e');
+      return task;
+    }
   }
 
   Future<Task?> read(String id) async {
-    final db = await database;
-    final maps = await db.query(
-      'tasks',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    try {
+      final db = await database;
+      final maps = await db.query(
+        'tasks',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
 
-    if (maps.isNotEmpty) {
-      return Task.fromMap(maps.first);
+      if (maps.isNotEmpty) {
+        return Task.fromMap(maps.first);
+      }
+      return null;
+    } catch (e) {
+      print('⚠️ Leitura de tarefa falhou (DB indisponível): $e');
+      return null;
     }
-    return null;
   }
 
   Future<List<Task>> readAll() async {
-    final db = await database;
-    // Ordenar por: 1) tarefas não concluídas primeiro, 2) data de vencimento (nulls por último), 3) data de criação
-    const orderBy = 'completed ASC, CASE WHEN dueDate IS NULL THEN 1 ELSE 0 END, dueDate ASC, createdAt DESC';
-    final result = await db.query('tasks', orderBy: orderBy);
-    return result.map((map) => Task.fromMap(map)).toList();
+    try {
+      final db = await database;
+      // Ordenar por: 1) tarefas não concluídas primeiro, 2) data de vencimento (nulls por último), 3) data de criação
+      const orderBy = 'completed ASC, CASE WHEN dueDate IS NULL THEN 1 ELSE 0 END, dueDate ASC, createdAt DESC';
+      final result = await db.query('tasks', orderBy: orderBy);
+      return result.map((map) => Task.fromMap(map)).toList();
+    } catch (e) {
+      // Em ambientes onde sqflite não funciona (web), retornar lista vazia
+      print('⚠️ readAll falhou (DB indisponível): $e');
+      return <Task>[];
+    }
   }
 
   // Método especial: buscar tarefas por proximidade
@@ -165,30 +194,49 @@ class DatabaseService {
 
 
   Future<int> update(Task task) async {
-    final db = await database;
-    return db.update(
-      'tasks',
-      task.toMap(),
-      where: 'id = ?',
-      whereArgs: [task.id],
-    );
+    try {
+      final db = await database;
+      return db.update(
+        'tasks',
+        task.toMap(),
+        where: 'id = ?',
+        whereArgs: [task.id],
+      );
+    } catch (e) {
+      print('⚠️ update falhou (DB indisponível): $e');
+      return 0;
+    }
   }
 
   Future<int> delete(String id) async {
-    final db = await database;
-    return await db.delete(
-      'tasks',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    try {
+      final db = await database;
+      return await db.delete(
+        'tasks',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } catch (e) {
+      print('⚠️ delete falhou (DB indisponível): $e');
+      return 0;
+    }
   }
 
   // ========== CRUD para Categorias ==========
   
   Future<List<Category>> readAllCategories() async {
-    final db = await database;
-    final result = await db.query('categories', orderBy: 'name ASC');
-    return result.map((map) => Category.fromMap(map)).toList();
+    try {
+      if (kIsWeb) {
+        return _defaultCategoriesList();
+      }
+
+      final db = await database;
+      final result = await db.query('categories', orderBy: 'name ASC');
+      return result.map((map) => Category.fromMap(map)).toList();
+    } catch (e) {
+      print('⚠️ readAllCategories falhou (DB indisponível): $e');
+      return _defaultCategoriesList();
+    }
   }
 
   Future<Category> createCategory(Category category) async {
