@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart';
 import '../models/task.dart';
 import '../models/category.dart';
+import '../models/sync_queue_item.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -22,9 +24,9 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 5,
+      version: 2,
       onCreate: _createDB,
-      onUpgrade: _onUpgrade,
+      onUpgrade: _upgradeDB,
     );
   }
 
@@ -38,7 +40,7 @@ class DatabaseService {
       )
     ''');
 
-    // Tabela de tarefas
+    // Tabela de tarefas (versão 2 com campos de sincronização)
     await db.execute('''
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
@@ -49,13 +51,20 @@ class DatabaseService {
         createdAt TEXT NOT NULL,
         dueDate TEXT,
         categoryId TEXT,
-        photoPaths TEXT,
-        completedAt TEXT,
-        completedBy TEXT,
-        latitude REAL,
-        longitude REAL,
-        locationName TEXT,
+        updatedAt TEXT NOT NULL,
+        syncStatus TEXT NOT NULL DEFAULT 'pending',
         FOREIGN KEY (categoryId) REFERENCES categories (id)
+      )
+    ''');
+
+    // Tabela de fila de sincronização
+    await db.execute('''
+      CREATE TABLE sync_queue (
+        id TEXT PRIMARY KEY,
+        operation TEXT NOT NULL,
+        taskId TEXT,
+        timestamp TEXT NOT NULL,
+        data TEXT NOT NULL
       )
     ''');
 
@@ -63,43 +72,23 @@ class DatabaseService {
     await _insertDefaultCategories(db);
   }
 
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Migração incremental para cada versão
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      // versões antigas podem já ter photoPath adicionado em v2
-      await db.execute('ALTER TABLE tasks ADD COLUMN photoPath TEXT');
-    }
-    if (oldVersion < 3) {
-      await db.execute('ALTER TABLE tasks ADD COLUMN completedAt TEXT');
-      await db.execute('ALTER TABLE tasks ADD COLUMN completedBy TEXT');
-    }
-    if (oldVersion < 4) {
-      await db.execute('ALTER TABLE tasks ADD COLUMN latitude REAL');
-      await db.execute('ALTER TABLE tasks ADD COLUMN longitude REAL');
-      await db.execute('ALTER TABLE tasks ADD COLUMN locationName TEXT');
-    }
-    // v5: migrar para photoPaths (JSON array)
-    if (oldVersion < 5) {
-      try {
-        await db.execute('ALTER TABLE tasks ADD COLUMN photoPaths TEXT');
+      // Adicionar campos de sincronização à tabela tasks
+      await db.execute('ALTER TABLE tasks ADD COLUMN updatedAt TEXT NOT NULL DEFAULT "${DateTime.now().toIso8601String()}"');
+      await db.execute('ALTER TABLE tasks ADD COLUMN syncStatus TEXT NOT NULL DEFAULT "pending"');
 
-        // Migrar dados existentes de photoPath para photoPaths
-        final rows = await db.query('tasks');
-        for (final row in rows) {
-          final id = row['id'] as String?;
-          final oldPhoto = row['photoPath'] as String?;
-          final newPhotoPaths = row['photoPaths'] as String?;
-
-          if (id != null && oldPhoto != null && (newPhotoPaths == null || newPhotoPaths.isEmpty)) {
-            final migrated = '["' + oldPhoto.replaceAll('"', '\\"') + '"]';
-            await db.update('tasks', {'photoPaths': migrated}, where: 'id = ?', whereArgs: [id]);
-          }
-        }
-      } catch (e) {
-        print('⚠️ Erro na migração para photoPaths: $e');
-      }
+      // Criar tabela de fila de sincronização
+      await db.execute('''
+        CREATE TABLE sync_queue (
+          id TEXT PRIMARY KEY,
+          operation TEXT NOT NULL,
+          taskId TEXT,
+          timestamp TEXT NOT NULL,
+          data TEXT NOT NULL
+        )
+      ''');
     }
-    print('✅ Banco migrado de v$oldVersion para v$newVersion');
   }
 
   Future<void> _insertDefaultCategories(Database db) async {
@@ -131,6 +120,16 @@ class DatabaseService {
     try {
       final db = await database;
       await db.insert('tasks', task.toMap());
+      
+      // Adiciona à fila de sincronização
+      final syncItem = SyncQueueItem.create(
+        operation: 'create',
+        taskId: task.id,
+        data: task.toMap(),
+      );
+      await addToSyncQueue(syncItem);
+      print('📝 Tarefa criada e adicionada à fila: ${task.title}');
+      
       return task;
     } catch (e) {
       // Ambiente web ou erro ao acessar o banco: log e retornar o objeto sem persistência
@@ -172,38 +171,46 @@ class DatabaseService {
     }
   }
 
-  // Método especial: buscar tarefas por proximidade
-  Future<List<Task>> getTasksNearLocation({
-    required double latitude,
-    required double longitude,
-    double radiusInMeters = 1000,
-  }) async {
-    final allTasks = await readAll();
-
-    return allTasks.where((task) {
-      if (!task.hasLocation) return false;
-
-      // Cálculo de distância usando fórmula de Haversine (simplificada)
-      final latDiff = (task.latitude! - latitude).abs();
-      final lonDiff = (task.longitude! - longitude).abs();
-      final distance = ((latDiff * 111000) + (lonDiff * 111000)) / 2;
-
-      return distance <= radiusInMeters;
-    }).toList();
-  }
-
-
   Future<int> update(Task task) async {
     try {
       final db = await database;
-      return db.update(
+      final result = await db.update(
         'tasks',
         task.toMap(),
         where: 'id = ?',
         whereArgs: [task.id],
       );
+      
+      // Só adiciona à fila se não estiver sincronizado
+      if (task.syncStatus != 'synced') {
+        final syncItem = SyncQueueItem.create(
+          operation: 'update',
+          taskId: task.id,
+          data: task.toMap(),
+        );
+        await addToSyncQueue(syncItem);
+        print('🔄 Tarefa atualizada e adicionada à fila: ${task.title}');
+      }
+      
+      return result;
     } catch (e) {
       print('⚠️ update falhou (DB indisponível): $e');
+      return 0;
+    }
+  }
+
+  /// Atualiza apenas o syncStatus de uma tarefa (sem adicionar à fila)
+  Future<int> updateSyncStatus(String taskId, String syncStatus) async {
+    try {
+      final db = await database;
+      return await db.update(
+        'tasks',
+        {'syncStatus': syncStatus},
+        where: 'id = ?',
+        whereArgs: [taskId],
+      );
+    } catch (e) {
+      print('⚠️ updateSyncStatus falhou: $e');
       return 0;
     }
   }
@@ -211,11 +218,23 @@ class DatabaseService {
   Future<int> delete(String id) async {
     try {
       final db = await database;
-      return await db.delete(
+      
+      // Adiciona à fila de sincronização antes de deletar
+      final syncItem = SyncQueueItem.create(
+        operation: 'delete',
+        taskId: id,
+        data: {},
+      );
+      await addToSyncQueue(syncItem);
+      
+      final result = await db.delete(
         'tasks',
         where: 'id = ?',
         whereArgs: [id],
       );
+      print('🗑️ Tarefa deletada e adicionada à fila: $id');
+      
+      return result;
     } catch (e) {
       print('⚠️ delete falhou (DB indisponível): $e');
       return 0;
@@ -284,5 +303,71 @@ class DatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  // ========== Métodos para Fila de Sincronização ==========
+
+  /// Adiciona um item à fila de sincronização
+  Future<void> addToSyncQueue(SyncQueueItem item) async {
+    try {
+      final db = await database;
+      await db.insert('sync_queue', {
+        'id': item.id,
+        'operation': item.operation,
+        'taskId': item.taskId,
+        'timestamp': item.timestamp.toIso8601String(),
+        'data': jsonEncode(item.data),
+      });
+      print('📤 Item adicionado à fila: ${item.operation} - ${item.taskId}');
+    } catch (e) {
+      print('⚠️ addToSyncQueue falhou: $e');
+    }
+  }
+
+  /// Remove um item da fila de sincronização
+  Future<void> removeFromSyncQueue(String id) async {
+    try {
+      final db = await database;
+      await db.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
+    } catch (e) {
+      print('⚠️ removeFromSyncQueue falhou: $e');
+    }
+  }
+
+  /// Retorna todos os itens da fila de sincronização, ordenados por timestamp
+  Future<List<SyncQueueItem>> getSyncQueue() async {
+    try {
+      final db = await database;
+      final result = await db.query('sync_queue', orderBy: 'timestamp ASC');
+      print('📋 Itens na fila de sincronização: ${result.length}');
+      
+      List<SyncQueueItem> items = [];
+      for (final map in result) {
+        try {
+          final item = SyncQueueItem.fromMap(map);
+          items.add(item);
+          print('  ✓ ${item.operation}: ${item.taskId}');
+        } catch (e) {
+          // Se houver erro ao parsear, remove o item corrompido
+          print('  ✗ Item corrompido removido: ${map['id']} - $e');
+          await db.delete('sync_queue', where: 'id = ?', whereArgs: [map['id']]);
+        }
+      }
+      
+      return items;
+    } catch (e) {
+      print('⚠️ getSyncQueue falhou: $e');
+      return [];
+    }
+  }
+
+  /// Limpa toda a fila de sincronização (após sync bem-sucedido)
+  Future<void> clearSyncQueue() async {
+    try {
+      final db = await database;
+      await db.delete('sync_queue');
+    } catch (e) {
+      print('⚠️ clearSyncQueue falhou: $e');
+    }
   }
 }

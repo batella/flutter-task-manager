@@ -3,10 +3,6 @@ import 'package:intl/intl.dart';
 import '../models/task.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
-import '../services/camera_service.dart';
-import '../src/image_loader_stub.dart' if (dart.library.io) '../src/image_loader_io.dart' as image_loader;
-import '../widgets/location_picker.dart';
-// import '../services/location_service.dart'; // LocationPicker já importa internamente
 
 class TaskFormScreen extends StatefulWidget {
   final Task? task; // null = criar novo, não-null = editar
@@ -28,20 +24,11 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
   DateTime? _dueDate;
   String? _selectedCategoryId;
   List<Category> _categories = [];
-  // CÂMERA
-  List<String> _photoPaths = [];
-
-  // GPS
-  double? _latitude;
-  double? _longitude;
-  String? _locationName;
 
   @override
   void initState() {
     super.initState();
     _loadCategories();
-    // Inicializa câmera se necessário
-    CameraService.instance.initialize();
 
     // Se estiver editando, preencher campos
     if (widget.task != null) {
@@ -51,10 +38,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
       _completed = widget.task!.completed;
       _dueDate = widget.task!.dueDate;
       _selectedCategoryId = widget.task!.categoryId;
-  _photoPaths = widget.task!.photoPaths ?? [];
-      _latitude = widget.task!.latitude;
-      _longitude = widget.task!.longitude;
-      _locationName = widget.task!.locationName;
     }
   }
 
@@ -70,106 +53,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
-  }
-
-  // CÂMERA METHODS
-  Future<void> _takePicture() async {
-    final photoPath = await CameraService.instance.takePicture(context);
-    if (photoPath != null && mounted) {
-      setState(() => _photoPaths.add(photoPath));
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('📷 Foto capturada!'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  Future<void> _pickFromGallery() async {
-    final paths = await CameraService.instance.pickFromGallery(context);
-    if (paths != null && paths.isNotEmpty && mounted) {
-      setState(() => _photoPaths.addAll(paths));
-    }
-  }
-
-  Future<void> _removePhotoAt(int index) async {
-    final path = _photoPaths[index];
-    final deleted = await CameraService.instance.deletePhoto(path);
-    if (deleted) {
-      setState(() => _photoPaths.removeAt(index));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('🗑️ Foto removida')),
-      );
-    } else {
-      // Mesmo que não consiga deletar do FS, removemos da lista
-      setState(() => _photoPaths.removeAt(index));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('🗑️ Foto removida da tarefa')),);
-    }
-  }
-
-  void _viewPhotoAt(String photoPath) {
-    if (photoPath.isEmpty) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-          ),
-          body: Center(
-            child: InteractiveViewer(
-              child: image_loader.imageWidgetFromPath(photoPath, fit: BoxFit.contain),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // GPS METHODS
-  void _showLocationPicker() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: SingleChildScrollView(
-          child: LocationPicker(
-            initialLatitude: _latitude,
-            initialLongitude: _longitude,
-            initialAddress: _locationName,
-            onLocationSelected: (lat, lon, address) {
-              setState(() {
-                _latitude = lat;
-                _longitude = lon;
-                _locationName = address;
-              });
-              Navigator.pop(context);
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _removeLocation() {
-    setState(() {
-      _latitude = null;
-      _longitude = null;
-      _locationName = null;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('📍 Localização removida')),
-    );
   }
 
   Future<void> _saveTask() async {
@@ -189,10 +72,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
           completed: _completed,
           dueDate: _dueDate,
           categoryId: _selectedCategoryId,
-          photoPaths: _photoPaths,
-          latitude: _latitude,
-          longitude: _longitude,
-          locationName: _locationName,
         );
         await DatabaseService.instance.create(newTask);
 
@@ -214,10 +93,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
           completed: _completed,
           dueDate: _dueDate,
           categoryId: _selectedCategoryId,
-          photoPaths: _photoPaths,
-          latitude: _latitude,
-          longitude: _longitude,
-          locationName: _locationName,
         );
         await DatabaseService.instance.update(updatedTask);
 
@@ -311,79 +186,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
 
                     const SizedBox(height: 16),
 
-                              // FOTO (Câmera / Galeria) - várias
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Fotos da tarefa', style: Theme.of(context).textTheme.labelLarge),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      ElevatedButton.icon(
-                                        onPressed: _takePicture,
-                                        icon: const Icon(Icons.camera_alt),
-                                        label: const Text('Capturar'),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      ElevatedButton.icon(
-                                        onPressed: _pickFromGallery,
-                                        icon: const Icon(Icons.photo_library),
-                                        label: const Text('Galeria'),
-                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  if (_photoPaths.isNotEmpty)
-                                    GridView.builder(
-                                      shrinkWrap: true,
-                                      physics: const NeverScrollableScrollPhysics(),
-                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 3,
-                                        crossAxisSpacing: 8,
-                                        mainAxisSpacing: 8,
-                                        childAspectRatio: 1,
-                                      ),
-                                      itemCount: _photoPaths.length,
-                                      itemBuilder: (context, idx) {
-                                        final p = _photoPaths[idx];
-                                        return Stack(
-                                          children: [
-                                            ClipRRect(
-                                              borderRadius: BorderRadius.circular(8),
-                                              child: GestureDetector(
-                                                onTap: () => _viewPhotoAt(p),
-                                                child: image_loader.imageWidgetFromPath(
-                                                  p,
-                                                  fit: BoxFit.cover,
-                                                ),
-                                              ),
-                                            ),
-                                            Positioned(
-                                              top: 4,
-                                              right: 4,
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black54,
-                                                  borderRadius: BorderRadius.circular(20),
-                                                ),
-                                                child: IconButton(
-                                                  padding: EdgeInsets.zero,
-                                                  constraints: const BoxConstraints(),
-                                                  icon: const Icon(Icons.delete, size: 18, color: Colors.white),
-                                                  onPressed: () => _removePhotoAt(idx),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                    ),
-                                ],
-                              ),
-
-                    const SizedBox(height: 16),
-
                     // Dropdown de Prioridade
                     DropdownButtonFormField<String>(
                       initialValue: _priority,
@@ -439,71 +241,6 @@ class _TaskFormScreenState extends State<TaskFormScreen> {
                           setState(() => _priority = value);
                         }
                       },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // LOCALIZAÇÃO (GPS)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Localização', style: Theme.of(context).textTheme.labelLarge),
-                        const SizedBox(height: 8),
-                        if (_latitude == null || _longitude == null) ...[
-                          OutlinedButton.icon(
-                            onPressed: _showLocationPicker,
-                            icon: const Icon(Icons.location_on),
-                            label: const Text('Selecionar Localização'),
-                          ),
-                        ] else ...[
-                          Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.place, color: Colors.blue),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          _locationName ?? 'Sem endereço',
-                                          style: const TextStyle(fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text('Lat: ${_latitude!.toStringAsFixed(6)}'),
-                                  Text('Lon: ${_longitude!.toStringAsFixed(6)}'),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: _showLocationPicker,
-                                          icon: const Icon(Icons.edit_location_alt),
-                                          label: const Text('Alterar'),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: OutlinedButton.icon(
-                                          onPressed: _removeLocation,
-                                          icon: const Icon(Icons.delete_outline),
-                                          label: const Text('Remover'),
-                                          style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
                     ),
 
                     const SizedBox(height: 16),

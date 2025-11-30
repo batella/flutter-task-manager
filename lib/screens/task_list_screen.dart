@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import '../models/task.dart';
 import '../models/category.dart';
 import '../services/database_service.dart';
+import '../services/connectivity_service.dart';
 import '../widgets/task_card.dart';
 import 'task_form_screen.dart';
-import '../services/sensor_service.dart';
-import '../services/location_service.dart';
 
 class TaskListScreen extends StatefulWidget {
-  const TaskListScreen({super.key});
+  final ConnectivityService? connectivityService;
+  final dynamic syncService;
+
+  const TaskListScreen({super.key, this.connectivityService, this.syncService});
 
   @override
   State<TaskListScreen> createState() => _TaskListScreenState();
@@ -20,160 +22,46 @@ class _TaskListScreenState extends State<TaskListScreen> {
   String _filter = 'all'; // all, completed, pending
   String? _categoryFilter;
   bool _isLoading = false;
+  bool _isOnline = true; // Status de conectividade
 
   @override
   void initState() {
     super.initState();
     _loadTasks();
     _loadCategories();
-    _setupShakeDetection(); // INICIAR SHAKE DETECTION
-  }
-    @override
-  void dispose() {
-    SensorService.instance.stop(); // PARAR SHAKE
-    super.dispose();
+    _setupConnectivityListener();
+    _setupSyncListener();
   }
 
-
-  // SHAKE DETECTION
-  void _setupShakeDetection() {
-    SensorService.instance.startShakeDetection(() {
-      _showShakeDialog();
-    });
-  }
-
-  void _showShakeDialog() {
-    final pendingTasks = _tasks.where((t) => !t.completed).toList();
-
-    if (pendingTasks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('🎉 Nenhuma tarefa pendente!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: const [
-            Icon(Icons.vibration, color: Colors.blue),
-            SizedBox(width: 8),
-            Expanded(child: Text('Shake detectado!')),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Selecione uma tarefa para completar:'),
-            const SizedBox(height: 16),
-            ...pendingTasks.take(3).map((task) => ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                task.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: IconButton(
-                icon: const Icon(Icons.check_circle, color: Colors.green),
-                onPressed: () => _completeTaskByShake(task),
-              ),
-            )),
-            if (pendingTasks.length > 3)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '+ ${pendingTasks.length - 3} outras',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _completeTaskByShake(Task task) async {
-    try {
-      final updated = task.copyWith(
-        completed: true,
-        completedAt: DateTime.now(),
-        completedBy: 'shake',
-      );
-
-      await DatabaseService.instance.update(updated);
-      Navigator.pop(context);
-      await _loadTasks();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ "${task.title}" completa via shake!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      Navigator.pop(context);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Erro: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+  /// Escuta mudanças de conectividade
+  void _setupConnectivityListener() {
+    if (widget.connectivityService != null) {
+      widget.connectivityService!.connectivityStream.listen((isOnline) {
+        if (mounted) {
+          setState(() {
+            _isOnline = isOnline;
+          });
+        }
+      });
+      // Define estado inicial
+      _isOnline = widget.connectivityService!.isOnline;
     }
   }
 
-  Future<void> _filterByNearby() async {
-    final position = await LocationService.instance.getCurrentLocation();
-
-    if (position == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('❌ Não foi possível obter localização'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-
-    final nearbyTasks = await DatabaseService.instance.getTasksNearLocation(
-      latitude: position.latitude,
-      longitude: position.longitude,
-      radiusInMeters: 1000,
-    );
-
-    setState(() {
-      _tasks = nearbyTasks;
-      _filter = 'nearby';
-    });
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('📍 ${nearbyTasks.length} tarefa(s) próxima(s)'),
-          backgroundColor: Colors.blue,
-        ),
-      );
+  /// Escuta conclusão de sincronização para recarregar tarefas
+  void _setupSyncListener() {
+    if (widget.syncService != null) {
+      widget.syncService.syncCompleteStream.listen((_) {
+        if (mounted) {
+          print('🔄 Sincronização concluída - recarregando tarefas');
+          _loadTasks();
+        }
+      });
     }
   }
+
+
+
 
   Future<void> _loadTasks() async {
     setState(() => _isLoading = true);
@@ -321,6 +209,26 @@ class _TaskListScreenState extends State<TaskListScreen> {
 
       body: Column(
         children: [
+          // Banner de status de conectividade
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            height: _isOnline ? 0 : 40,
+            color: Colors.orange[700],
+            child: _isOnline
+                ? const SizedBox.shrink()
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(Icons.cloud_off, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Offline - Alterações serão sincronizadas quando conectar',
+                        style: TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ],
+                  ),
+          ),
+
           // Card de Estatísticas
           if (_tasks.isNotEmpty)
             Container(
